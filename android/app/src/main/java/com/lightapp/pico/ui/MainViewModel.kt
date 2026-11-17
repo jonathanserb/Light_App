@@ -3,6 +3,7 @@ package com.lightapp.pico.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.lightapp.pico.Settings
 import com.lightapp.pico.ble.PicoBle
 import com.lightapp.pico.data.DeviceInfo
 import com.lightapp.pico.data.PicoClient
@@ -12,14 +13,15 @@ import com.lightapp.pico.data.Schedule
 import com.lightapp.pico.data.mapObjects
 import com.lightapp.pico.data.parseValue
 import com.lightapp.pico.data.pinToJson
+import java.io.IOException
+import java.time.LocalDateTime
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
-import java.time.LocalDateTime
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val ble = PicoBle(app)
@@ -31,7 +33,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val schedules = MutableStateFlow<List<Schedule>>(emptyList())
     val programs = MutableStateFlow<List<ProgramInfo>>(emptyList())
     val adc = MutableStateFlow<List<Double>>(emptyList())
-    val message = MutableStateFlow<String?>(null) // shown once as a snackbar
+    val messages = MutableSharedFlow<String>(extraBufferCapacity = 8) // each is shown once as a pop-up
     val lastDevice = MutableStateFlow(
         prefs.getString("addr", null)?.let { it to (prefs.getString("name", null) ?: "Pico") }
     )
@@ -49,9 +51,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     PicoBle.State.DISCONNECTED -> {
                         info.value = null
                         if (!userDisconnected && previous != PicoBle.State.DISCONNECTED) {
-                            message.value = if (previous == PicoBle.State.CONNECTING)
+                            say(if (previous == PicoBle.State.CONNECTING)
                                 "Couldn't connect. Is the Pico powered and in range?"
-                            else "Connection lost"
+                            else "Connection lost")
                         }
                     }
                     else -> {}
@@ -62,21 +64,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             client.events.collect { ev ->
                 when (ev.optString("ev")) {
-                    "fired" -> { message.value = "Schedule ran: ${ev.optString("name").ifBlank { "#${ev.optInt("sched")}" }}"; refreshAll() }
-                    "prog_end" -> { message.value = "Program “${ev.optString("name")}” finished"; refreshAll() }
-                    "prog_err" -> { message.value = "Program “${ev.optString("name")}” failed: ${ev.optString("err")}"; refreshAll() }
-                    "sched_err" -> message.value = "Schedule failed: ${ev.optString("err")}"
+                    "fired" -> { say("Schedule ran: ${ev.optString("name").ifBlank { "#${ev.optInt("sched")}" }}"); refreshAll() }
+                    "prog_end" -> { say("Program “${ev.optString("name")}” finished"); refreshAll() }
+                    "prog_err" -> { say("Program “${ev.optString("name")}” failed: ${ev.optString("err")}"); refreshAll() }
+                    "sched_err" -> say("Schedule failed: ${ev.optString("err")}")
                 }
             }
         }
     }
 
-    /** Run a command; failures become a snackbar unless [quiet] (background polling). */
+    /** Show a short pop-up message at the bottom of the screen. */
+    private fun say(text: String) {
+        messages.tryEmit(text)
+    }
+
+    /**
+     * Every action below is wrapped in this: it runs [block] and turns any
+     * Bluetooth or Pico error into a pop-up, unless [quiet] (background polling).
+     */
     private fun run(quiet: Boolean = false, block: suspend () -> Unit) = viewModelScope.launch {
         try {
             block()
         } catch (e: IOException) {
-            if (!quiet) message.value = e.message ?: "Bluetooth error"
+            if (!quiet) say(e.message ?: "Bluetooth error")
         }
     }
 
@@ -85,7 +95,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startScan() {
         scanJob?.cancel()
         ble.startScan()
-        scanJob = viewModelScope.launch { delay(15_000); ble.stopScan() }
+        scanJob = viewModelScope.launch { delay(Settings.SCAN_DURATION_MS); ble.stopScan() }
     }
 
     fun connect(address: String, name: String) {
@@ -118,7 +128,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (ble.state.value == PicoBle.State.CONNECTED) {
                 userDisconnected = true
                 ble.disconnect()
-                message.value = "This device didn't respond as expected (${e.message})"
+                say("This device didn't respond as expected (${e.message})")
             }
         }
     }
@@ -131,7 +141,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun unlocked() {
         // The Pico has no battery-backed clock, so set it on every connection.
-        client.request("time.set", "t" to phoneTime())
+        if (Settings.SET_CLOCK_ON_CONNECT) client.request("time.set", "t" to phoneTime())
         loadAll()
     }
 
@@ -179,25 +189,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun syncTime() = run {
         client.request("time.set", "t" to phoneTime())
         loadInfo()
-        message.value = "Clock set from phone"
+        say("Clock set from phone")
     }
 
     fun rename(name: String) = run {
         client.request("name.set", "name" to name)
         loadInfo()
-        message.value = "Renamed. The new name is advertised after the next reboot."
+        say("Renamed. The new name is advertised after the next reboot.")
     }
 
     fun setPasscode(pass: String) = run {
         client.request("pass.set", "pass" to pass)
         prefs.edit().putString("pass_$address", pass).apply()
         loadInfo()
-        message.value = if (pass.isEmpty()) "Passcode removed" else "Passcode set"
+        say(if (pass.isEmpty()) "Passcode removed" else "Passcode set")
     }
 
     fun reboot() = run {
         client.request("reboot")
-        message.value = "Rebooting…"
+        say("Rebooting…")
     }
 
     // ---- pins ------------------------------------------------------------
@@ -251,7 +261,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun saveParams(program: ProgramInfo, edits: Map<String, String>) = run {
         storeParams(program, edits)
         loadPrograms()
-        message.value = "Parameters saved"
+        say("Parameters saved")
     }
 
     fun runProgram(program: ProgramInfo, edits: Map<String, String>) = run {

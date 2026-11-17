@@ -1,5 +1,9 @@
 """Pico light controller. Copy every .py file in this folder to the Pico W.
 
+Starting point: builds the controller and the Bluetooth link, then loops
+forever passing received lines to the controller and sending replies back.
+Tunable values are in settings.py; your own programs go in programs.py.
+
 Runs on its own after power-up; the phone is only needed to change settings
 and to set the clock (see README: the clock is lost when power is removed).
 """
@@ -13,6 +17,7 @@ try:
 except ImportError:
     import uasyncio as asyncio
 
+import settings
 from ble_uart import BleUart
 from controller import Controller
 from hal_pico import Hal
@@ -31,7 +36,7 @@ async def main():
             outbox.append(ctl.handle_line(line))
         while outbox:
             await uart.send_line(outbox.pop(0))
-        await asyncio.sleep_ms(20)
+        await asyncio.sleep_ms(settings.LOOP_SLEEP_MS)
 
 
 try:
@@ -39,5 +44,5 @@ try:
 except Exception as e:  # unattended: log, wait, restart rather than sit dead
     import sys
     sys.print_exception(e)
-    time.sleep(5)
+    time.sleep(settings.RESTART_AFTER_CRASH_S)
     machine.reset()

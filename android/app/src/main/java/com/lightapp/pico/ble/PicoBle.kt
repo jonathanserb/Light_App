@@ -17,6 +17,9 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
+import com.lightapp.pico.Settings
+import java.io.IOException
+import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,8 +27,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.IOException
-import java.util.UUID
 
 /**
  * Bluetooth LE link to the Pico using the Nordic UART Service: text lines out
@@ -126,7 +127,7 @@ class PicoBle(private val context: Context) {
                 mtu = 23
                 framer.reset()
                 // A bigger MTU means far fewer packets per message. Falls back to 23 if refused.
-                if (!g.requestMtu(247)) g.discoverServices()
+                if (!g.requestMtu(Settings.REQUESTED_MTU)) g.discoverServices()
             } else {
                 closed(g)
             }
@@ -200,7 +201,7 @@ class PicoBle(private val context: Context) {
                 g.writeCharacteristic(c)
             }
             if (!started) throw IOException("Bluetooth write failed")
-            val status = withTimeoutOrNull(5000) { done.await() }
+            val status = withTimeoutOrNull(Settings.WRITE_TIMEOUT_MS) { done.await() }
                 ?: throw IOException("Bluetooth write timed out")
             if (status != BluetoothGatt.GATT_SUCCESS) throw IOException("Bluetooth write failed ($status)")
         }

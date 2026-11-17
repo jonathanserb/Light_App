@@ -7,6 +7,19 @@ Protocol: one JSON object per line in each direction.
     request   {"id": 7, "cmd": "pin.set", "pin": 15, "value": 1}
     response  {"id": 7, "ok": true}   or   {"id": 7, "ok": false, "err": "..."}
     event     {"ev": "fired", "sched": 3, "name": "Evening on"}
+
+Where things are in this file (search for the "# ----" banners):
+    Ctx          what a running program can do (the `ctx` in programs.py)
+    storage      loading and saving config.json
+    pins         pin modes and values
+    programs     starting and stopping the functions in programs.py
+    schedules    firing schedules; tick() runs once a second
+    connection   passcode lock, and handle_line() which every request enters by
+    commands     one method per protocol command, each marked @command("name")
+
+To add a command: write a method in the commands section and put
+@command("your.name") above it. It receives the request as a dict and returns
+a dict of reply fields (or nothing). Raise CmdError("message") to refuse.
 """
 import json
 import os
@@ -16,17 +29,32 @@ try:
 except ImportError:  # MicroPython older than 1.21
     import uasyncio as asyncio
 
+import settings
 from programs import PROGRAMS
 
-FW_VERSION = "1.0.0"
-MAX_SCHEDULES = 32
+FW_VERSION = "1.1.0"
 MODES = ("in", "in_up", "in_down", "out", "pwm")
 ACTIONS = ("pin", "pwm", "prog", "stop")
-SAVE_DELAY_S = 2  # batch flash writes: save this long after the last change
+OPEN_COMMANDS = ("info", "auth")  # allowed before the passcode has been given
+
+# Everything remembered about one pin. To remember something new, add it here:
+# pins saved by older versions of this file pick up the default automatically.
+PIN_DEFAULTS = {"mode": "in", "value": 0, "duty": 0,
+                "freq": settings.DEFAULT_PWM_FREQ, "label": ""}
+
+COMMANDS = {}  # command name -> Controller method, filled in by @command
+
+
+def command(name):
+    """Mark a Controller method as the handler for protocol command `name`."""
+    def register(fn):
+        COMMANDS[name] = fn
+        return fn
+    return register
 
 
 class CmdError(Exception):
-    pass
+    """Raise from a command to send {"ok": false, "err": message} back."""
 
 
 def _need(req, key):
@@ -68,7 +96,7 @@ class Ctx:
         return self._ctl.read(self._ctl.key(pin))
 
     def adc(self, channel):
-        return self._ctl.hal.adc_read(channel) * 3.3 / 65535
+        return self._ctl.hal.adc_read(channel) * settings.ADC_VREF / 65535
 
     def now(self):
         return self._ctl.hal.now()
@@ -78,11 +106,11 @@ class Ctx:
 
 
 class Controller:
-    def __init__(self, hal, path="config.json"):
+    def __init__(self, hal, path=settings.CONFIG_FILE):
         self.hal = hal
         self.path = path
         self.emit = lambda event: None  # set by main.py to push events to the phone
-        self.cfg = {"name": "Pico", "pass": "", "pins": {}, "sched": [],
+        self.cfg = {"name": settings.DEFAULT_NAME, "pass": "", "pins": {}, "sched": [],
                     "params": {}, "boot_prog": None}
         self._load()
         self.pins = self.cfg["pins"]
@@ -95,19 +123,6 @@ class Controller:
         self._last_minute = None
         self._save_at = None
         self._reset_at = None
-        self._cmds = {
-            "info": self._c_info, "auth": self._c_auth,
-            "time.set": self._c_time_set, "name.set": self._c_name_set,
-            "pass.set": self._c_pass_set, "reboot": self._c_reboot,
-            "pin.list": self._c_pin_list, "pin.cfg": self._c_pin_cfg,
-            "pin.set": self._c_pin_set, "pin.get": self._c_pin_get,
-            "adc.get": self._c_adc_get,
-            "sched.list": self._c_sched_list, "sched.put": self._c_sched_put,
-            "sched.del": self._c_sched_del,
-            "prog.list": self._c_prog_list, "prog.run": self._c_prog_run,
-            "prog.stop": self._c_prog_stop, "prog.boot": self._c_prog_boot,
-            "param.set": self._c_param_set,
-        }
         for key in list(self.pins):
             try:
                 self._apply(key)
@@ -125,6 +140,9 @@ class Controller:
                     self.cfg[k] = saved.get(k)
         except (OSError, ValueError):
             pass  # first boot or corrupt file: start with defaults
+        for st in self.cfg["pins"].values():
+            for k in PIN_DEFAULTS:
+                st.setdefault(k, PIN_DEFAULTS[k])
 
     def save_now(self):
         tmp = self.path + ".tmp"
@@ -134,7 +152,7 @@ class Controller:
         self._save_at = None
 
     def _dirty(self):
-        self._save_at = self.hal.ticks() + SAVE_DELAY_S
+        self._save_at = self.hal.ticks() + settings.SAVE_DELAY_S
 
     # ---- pins ------------------------------------------------------------
 
@@ -152,8 +170,32 @@ class Controller:
 
     def _state(self, key):
         if key not in self.pins:
-            self.pins[key] = {"mode": "in", "value": 0, "duty": 0, "freq": 1000, "label": ""}
+            self.pins[key] = dict(PIN_DEFAULTS)
         return self.pins[key]
+
+    def _change(self, key, changes):
+        """Update a pin's remembered state and the real pin together.
+
+        If the hardware refuses (e.g. PWM on the on-board LED) the pin is put
+        back exactly as it was, so a bad request can't leave a broken entry.
+        """
+        is_new = key not in self.pins
+        st = self._state(key)
+        old = dict(st)
+        st.update(changes)
+        try:
+            self._apply(key)
+        except Exception:
+            if is_new:
+                del self.pins[key]
+            else:
+                self.pins[key] = old
+                try:
+                    self._apply(key)
+                except Exception:
+                    pass
+            raise CmdError("%s can't do mode '%s'"
+                           % ("LED" if key == "LED" else "GP" + key, st["mode"]))
 
     def _apply(self, key):
         st = self.pins[key]
@@ -168,21 +210,22 @@ class Controller:
         self._reverts = [r for r in self._reverts if not (r[1] == kind and r[2] == key)]
 
     def set_digital(self, key, value):
-        st = self._state(key)
-        st["value"] = 1 if value else 0
-        if st["mode"] != "out":
-            st["mode"] = "out"
-            self._apply(key)
+        value = 1 if value else 0
+        st = self.pins.get(key)
+        if st and st["mode"] == "out":  # the common case: already an output
+            st["value"] = value
+            self.hal.pin_write(key, value)
         else:
-            self.hal.pin_write(key, st["value"])
+            self._change(key, {"mode": "out", "value": value})
 
-    def set_pwm(self, key, duty, freq=None):
-        st = self._state(key)
-        st["duty"] = min(100, max(0, duty))
-        if freq:
-            st["freq"] = freq
-        st["mode"] = "pwm"
-        self.hal.pwm_write(key, st["duty"], st["freq"])
+    def set_pwm(self, key, duty):
+        duty = min(100, max(0, duty))
+        st = self.pins.get(key)
+        if st and st["mode"] == "pwm":  # the common case: already dimming
+            st["duty"] = duty
+            self.hal.pwm_write(key, duty, st["freq"])
+        else:
+            self._change(key, {"mode": "pwm", "duty": duty})
 
     def read(self, key):
         st = self.pins.get(key)
@@ -218,14 +261,17 @@ class Controller:
         me = asyncio.current_task()
         try:
             await PROGRAMS[name][0](ctx)
+            event = {"ev": "prog_end", "name": name}
         except asyncio.CancelledError:
-            raise
+            raise  # stopped or replaced: whoever did that has already tidied up
+        except CmdError as e:
+            event = {"ev": "prog_err", "name": name, "err": str(e)}
         except Exception as e:
-            self.emit({"ev": "prog_err", "name": name, "err": "%s: %s" % (type(e).__name__, e)})
-        if self._prog_task is me:  # finished on its own, not replaced or stopped
+            event = {"ev": "prog_err", "name": name, "err": "%s: %s" % (type(e).__name__, e)}
+        if self._prog_task is me:  # ended by itself
             self._prog_task = None
             self.prog_name = None
-            self.emit({"ev": "prog_end", "name": name})
+        self.emit(event)
 
     # ---- schedules -------------------------------------------------------
 
@@ -256,11 +302,15 @@ class Controller:
             self.stop_prog()
         self.emit({"ev": "fired", "sched": s["id"], "name": s.get("name", "")})
 
+    def clock_set(self, now):
+        """False until the phone has set the time (the Pico boots in the year 2021)."""
+        return now[0] >= settings.CLOCK_VALID_FROM_YEAR
+
     def tick(self):
         """Call about once a second. Runs due schedules and housekeeping."""
         now = self.hal.now()
         ticks = self.hal.ticks()
-        if now[0] >= 2024:  # clock has been set
+        if self.clock_set(now):
             minute = tuple(now[0:5])
             if minute != self._last_minute:
                 self._last_minute = minute
@@ -313,11 +363,11 @@ class Controller:
             req = json.loads(line)
             rid = req.get("id")
             cmd = req.get("cmd")
-            if self.locked and cmd not in ("info", "auth"):
+            if self.locked and cmd not in OPEN_COMMANDS:
                 raise CmdError("locked")
-            if cmd not in self._cmds:
+            if cmd not in COMMANDS:
                 raise CmdError("unknown cmd")
-            res = self._cmds[cmd](req) or {}
+            res = COMMANDS[cmd](self, req) or {}
             res["ok"] = True
         except CmdError as e:
             res = {"ok": False, "err": str(e)}
@@ -328,27 +378,31 @@ class Controller:
 
     # ---- commands --------------------------------------------------------
 
+    @command("info")
     def _c_info(self, req):
         now = self.hal.now()
         return {"fw": FW_VERSION, "name": self.cfg["name"], "time": list(now[0:7]),
-                "time_valid": now[0] >= 2024, "uptime": int(self.hal.ticks()),
+                "time_valid": self.clock_set(now), "uptime": int(self.hal.ticks()),
                 "temp_c": round(self.hal.temp_c(), 1), "mem_free": self.hal.mem_free(),
                 "prog": self.prog_name, "boot_prog": self.cfg.get("boot_prog"),
                 "n_sched": len(self.sched), "locked": self.locked,
                 "has_pass": bool(self.cfg["pass"])}
 
+    @command("auth")
     def _c_auth(self, req):
         if str(req.get("pass", "")) != self.cfg["pass"]:
             raise CmdError("wrong passcode")
         self.authed = True
 
+    @command("time.set")
     def _c_time_set(self, req):
         t = _need(req, "t")
         if not isinstance(t, list) or len(t) != 7:
             raise CmdError("t must be [year,month,day,hour,minute,second,weekday]")
-        limits = ((2024, 2099), (1, 12), (1, 31), (0, 23), (0, 59), (0, 59), (0, 6))
+        limits = ((settings.CLOCK_VALID_FROM_YEAR, 2099), (1, 12), (1, 31), (0, 23), (0, 59), (0, 59), (0, 6))
         self.hal.set_time([_int(v, lo, hi, "time") for v, (lo, hi) in zip(t, limits)])
 
+    @command("name.set")
     def _c_name_set(self, req):
         name = str(_need(req, "name")).strip()
         if not 1 <= len(name) <= 20:
@@ -356,11 +410,13 @@ class Controller:
         self.cfg["name"] = name
         self._dirty()
 
+    @command("pass.set")
     def _c_pass_set(self, req):
         self.cfg["pass"] = str(req.get("pass") or "")
         self.authed = True
         self._dirty()
 
+    @command("reboot")
     def _c_reboot(self, req):
         self.save_now()
         self._reset_at = self.hal.ticks() + 1  # leave time for the reply to go out
@@ -372,9 +428,11 @@ class Controller:
         return {"pin": key, "mode": st["mode"], "value": st["value"], "duty": st["duty"],
                 "freq": st["freq"], "label": st.get("label", "")}
 
+    @command("pin.list")
     def _c_pin_list(self, req):
         return {"pins": [self._pin_json(k) for k in self.pins]}
 
+    @command("pin.cfg")
     def _c_pin_cfg(self, req):
         key = self.key(_need(req, "pin"))
         mode = _need(req, "mode")
@@ -390,25 +448,16 @@ class Controller:
             return
         if mode not in MODES:
             raise CmdError("mode must be one of " + "/".join(MODES + ("off",)))
-        is_new = key not in self.pins
-        st = self._state(key)
-        old = dict(st)
-        st["mode"] = mode
+        changes = {"mode": mode}
         if "label" in req:
-            st["label"] = str(req["label"])[:24]
+            changes["label"] = str(req["label"])[:24]
         if "freq" in req:
-            st["freq"] = _int(req["freq"], 8, 100000, "freq")
-        try:
-            self._apply(key)
-        except Exception:
-            if is_new:
-                del self.pins[key]
-            else:
-                self.pins[key] = old
-            raise CmdError("%s can't do mode '%s'" % ("LED" if key == "LED" else "GP" + key, mode))
+            changes["freq"] = _int(req["freq"], 8, 100000, "freq")
+        self._change(key, changes)
         self._dirty()
         return {"pin": self._pin_json(key)}
 
+    @command("pin.set")
     def _c_pin_set(self, req):
         key = self.key(_need(req, "pin"))
         self._drop_reverts("pin", key)
@@ -419,17 +468,21 @@ class Controller:
         self._dirty()
         return {"pin": self._pin_json(key)}
 
+    @command("pin.get")
     def _c_pin_get(self, req):
         key = self.key(_need(req, "pin"))
         return {"value": self.read(key)}
 
+    @command("adc.get")
     def _c_adc_get(self, req):
         raw = self.hal.adc_read(_int(_need(req, "ch"), 0, 2, "ch"))
-        return {"raw": raw, "volts": round(raw * 3.3 / 65535, 3)}
+        return {"raw": raw, "volts": round(raw * settings.ADC_VREF / 65535, 3)}
 
+    @command("sched.list")
     def _c_sched_list(self, req):
         return {"items": self.sched}
 
+    @command("sched.put")
     def _c_sched_put(self, req):
         src = _need(req, "item")
         act_in = _need(src, "act")
@@ -461,13 +514,14 @@ class Controller:
             item["id"] = sid
             self.sched[self.sched.index(existing[0])] = item
         else:
-            if len(self.sched) >= MAX_SCHEDULES:
+            if len(self.sched) >= settings.MAX_SCHEDULES:
                 raise CmdError("schedule list is full")
             item["id"] = max([s["id"] for s in self.sched] + [0]) + 1
             self.sched.append(item)
         self._dirty()
         return {"item": item}
 
+    @command("sched.del")
     def _c_sched_del(self, req):
         sid = _need(req, "sid")  # not "id": that's the request id
         left = [s for s in self.sched if s["id"] != sid]
@@ -476,6 +530,7 @@ class Controller:
         self.sched[:] = left
         self._dirty()
 
+    @command("prog.list")
     def _c_prog_list(self, req):
         items = []
         for name in sorted(PROGRAMS):
@@ -484,14 +539,17 @@ class Controller:
                           "params": {k: self.param(name, k) for k in defaults}})
         return {"items": items, "running": self.prog_name, "boot": self.cfg.get("boot_prog")}
 
+    @command("prog.run")
     def _c_prog_run(self, req):
         self._drop_reverts("stop")
         self.start_prog(_need(req, "name"), req.get("args"))
 
+    @command("prog.stop")
     def _c_prog_stop(self, req):
         self._drop_reverts("stop")
         self.stop_prog()
 
+    @command("prog.boot")
     def _c_prog_boot(self, req):
         name = req.get("name")
         if name is not None and name not in PROGRAMS:
@@ -499,6 +557,7 @@ class Controller:
         self.cfg["boot_prog"] = name
         self._dirty()
 
+    @command("param.set")
     def _c_param_set(self, req):
         key = str(_need(req, "key"))
         value = req.get("value")

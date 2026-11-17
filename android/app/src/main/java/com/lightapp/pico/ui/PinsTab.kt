@@ -31,10 +31,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.lightapp.pico.Settings
 import com.lightapp.pico.data.PinState
 import com.lightapp.pico.data.pinName
-import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 @Composable
 fun PinsTab(vm: MainViewModel) {
@@ -44,7 +45,7 @@ fun PinsTab(vm: MainViewModel) {
 
     // Keep inputs (and pins changed by schedules/programs) fresh while this tab is open.
     LaunchedEffect(Unit) {
-        while (true) { delay(2000); vm.pollPins() }
+        while (true) { delay(Settings.PINS_REFRESH_MS); vm.pollPins() }
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {

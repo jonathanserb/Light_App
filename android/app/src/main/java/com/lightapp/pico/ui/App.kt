@@ -1,8 +1,8 @@
 package com.lightapp.pico.ui
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Info
@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lightapp.pico.ble.PicoBle
+import kotlinx.coroutines.flow.collectLatest
 
 private val TABS = listOf(
     "Status" to Icons.Default.Info,
@@ -49,15 +50,12 @@ private val TABS = listOf(
 fun App(vm: MainViewModel = viewModel()) {
     val state by vm.ble.state.collectAsStateWithLifecycle()
     val info by vm.info.collectAsStateWithLifecycle()
-    val message by vm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var tab by rememberSaveable { mutableIntStateOf(0) }
 
-    LaunchedEffect(message) {
-        message?.let {
-            vm.message.value = null
-            snackbar.showSnackbar(it)
-        }
+    // A newer message replaces the one on screen rather than queueing behind it.
+    LaunchedEffect(Unit) {
+        vm.messages.collectLatest { snackbar.showSnackbar(it) }
     }
 
     val device = info

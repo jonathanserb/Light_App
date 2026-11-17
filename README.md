@@ -20,7 +20,7 @@ pico/      the Pico firmware (MicroPython)
 
 1. Install MicroPython (v1.21 or newer) for your board: hold BOOTSEL while plugging in USB and
    copy the `.uf2` from <https://micropython.org/download/> onto the drive that appears.
-2. Copy the five `.py` files from `pico/` to the Pico. With
+2. Copy the six `.py` files from `pico/` to the Pico (not the `tests/` folder). With
    [Thonny](https://thonny.org): open each file and *File → Save as… → Raspberry Pi Pico*.
    Or with `mpremote`:
 
@@ -67,6 +67,12 @@ listed. The app sets the Pico's clock from the phone each time it connects.
 - GP23–25 and GP29 are used by the wireless chip and aren't available. The on-board `LED` can
   be switched but not dimmed.
 - One phone can be connected at a time.
+
+## Changing the code
+
+[DEVELOPING.md](DEVELOPING.md) maps out both halves and has step-by-step recipes for common
+changes. Values you're likely to tune are collected in `pico/settings.py` and the app's
+`Settings.kt`.
 
 ## Writing your own programs
 

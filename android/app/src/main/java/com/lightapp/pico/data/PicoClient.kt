@@ -1,6 +1,10 @@
 package com.lightapp.pico.data
 
+import com.lightapp.pico.Settings
 import com.lightapp.pico.ble.PicoBle
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -10,9 +14,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
 import org.json.JSONObject
-import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 
 /** The Pico answered, but with an error (or not at all). */
 class PicoException(message: String) : IOException(message)
@@ -40,7 +41,7 @@ class PicoClient(private val ble: PicoBle, scope: CoroutineScope) {
         }
     }
 
-    private fun addLog(line: String) = log.update { (it + line).takeLast(300) }
+    private fun addLog(line: String) = log.update { (it + line).takeLast(Settings.CONSOLE_LOG_LINES) }
 
     private fun onLine(line: String) {
         addLog("← $line")
@@ -58,7 +59,7 @@ class PicoClient(private val ble: PicoBle, scope: CoroutineScope) {
         pending[id] = reply
         try {
             sendRaw(req.toString())
-            val res = withTimeoutOrNull(5000) { reply.await() }
+            val res = withTimeoutOrNull(Settings.REPLY_TIMEOUT_MS) { reply.await() }
                 ?: throw PicoException("No reply from the Pico")
             if (!res.optBoolean("ok")) throw PicoException(res.optString("err", "Command failed"))
             return res

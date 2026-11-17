@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.lightapp.pico.Settings
 import com.lightapp.pico.data.DeviceInfo
 import com.lightapp.pico.data.Schedule
 import kotlinx.coroutines.delay
@@ -31,7 +32,7 @@ fun StatusTab(vm: MainViewModel, info: DeviceInfo) {
     var dialog by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        while (true) { delay(5000); vm.pollInfo() }
+        while (true) { delay(Settings.STATUS_REFRESH_MS); vm.pollInfo() }
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {

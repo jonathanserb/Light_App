@@ -134,6 +134,20 @@ class TestCommands(Base):
         self.assertFalse(self.cmd("pin.cfg", pin="LED", mode="pwm")["ok"])
         self.assertEqual(self.ctl.pins["LED"]["mode"], "out")
 
+    def test_failed_dim_leaves_pin_as_it_was(self):
+        self.assertFalse(self.cmd("pin.set", pin="LED", duty=50)["ok"])
+        self.assertNotIn("LED", self.ctl.pins)
+        self.ok("pin.set", pin="LED", value=1)
+        self.assertFalse(self.cmd("pin.set", pin="LED", duty=50)["ok"])
+        self.assertEqual((self.ctl.pins["LED"]["mode"], self.hal.levels["LED"]), ("out", 1))
+
+    def test_old_config_gets_new_pin_fields(self):
+        with open(self.path, "w") as f:
+            json.dump({"pins": {"7": {"mode": "out", "value": 1}}}, f)
+        self.ctl = self.make()
+        self.assertEqual(self.hal.levels["7"], 1)
+        self.assertEqual(self.ok("pin.list")["pins"][0]["label"], "")
+
     def test_wireless_pins_rejected(self):
         self.assertFalse(self.cmd("pin.set", pin=25, value=1)["ok"])
 
@@ -258,8 +272,10 @@ class TestPrograms(unittest.IsolatedAsyncioTestCase, Base):
     async def test_program_error_is_reported(self):
         self.ok("prog.run", name="breathe", args={"pin": "LED"})
         await self.settle()
-        self.assertEqual(self.events[0]["ev"], "prog_err")
+        self.assertEqual([e["ev"] for e in self.events], ["prog_err"])
+        self.assertEqual(self.events[0]["err"], "LED can't do mode 'pwm'")
         self.assertIsNone(self.ctl.prog_name)
+        self.assertNotIn("LED", self.ctl.pins)  # the failed attempt left nothing behind
 
     async def test_scheduled_program_with_duration_and_boot_program(self):
         self.ok("sched.put", item={"h": 5, "m": 0, "dur": 10,

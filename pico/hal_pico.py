@@ -3,6 +3,8 @@ import gc
 import time
 
 import machine
+
+import settings
 from machine import ADC, PWM, Pin, RTC
 
 _PULLS = {"in": None, "in_up": Pin.PULL_UP, "in_down": Pin.PULL_DOWN}
@@ -16,9 +18,8 @@ class Hal:
         self._last_ms = time.ticks_ms()
         self._uptime_ms = 0
 
-    # GP23-25 and GP29 are wired to the wireless chip on a Pico W, so skip them.
     def valid_pin(self, n):
-        return 0 <= n <= 22 or 26 <= n <= 28
+        return n in settings.USABLE_PINS
 
     def _id(self, key):
         return "LED" if key == "LED" else int(key)
@@ -56,7 +57,7 @@ class Hal:
         return self._adcs[ch].read_u16()
 
     def temp_c(self):
-        volts = self.adc_read(4) * 3.3 / 65535
+        volts = self.adc_read(4) * settings.ADC_VREF / 65535
         return 27 - (volts - 0.706) / 0.001721
 
     def now(self):
