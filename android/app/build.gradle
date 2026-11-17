@@ -1,0 +1,38 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.lightapp.pico"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.lightapp.pico"
+        minSdk 26          // Android 8.0
+        targetSdk 35
+        versionCode 2
+        versionName "1.1"
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        // Screen text is written directly in the layouts and code so it is easy to find
+        // and edit, rather than being collected in strings.xml for translation.
+        disable "HardcodedText", "SetTextI18n"
+    }
+    testOptions {
+        unitTests.includeAndroidResources = true   // lets the tests open real screens
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "com.google.android.material:material:1.12.0"
+    implementation "androidx.lifecycle:lifecycle-viewmodel:2.8.7"
+    implementation "androidx.lifecycle:lifecycle-livedata:2.8.7"
+
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.14.1"
+}

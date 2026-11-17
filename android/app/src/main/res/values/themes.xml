@@ -1,3 +1,5 @@
 <resources>
-    <style name="Theme.PicoLight" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- The whole app's look. Follows the phone's light/dark setting.
+         To change colours, add items such as colorPrimary here. -->
+    <style name="Theme.PicoLight" parent="Theme.Material3.DayNight.NoActionBar" />
 </resources>

@@ -12,7 +12,7 @@ Each half has one file of plain tunable values. Look there first:
 | | File | Examples |
 |---|---|---|
 | Pico | `pico/settings.py` | default name, which pins may be used, schedule limit, advertising interval |
-| App | `android/app/src/main/java/com/lightapp/pico/Settings.kt` | timeouts, refresh rates, whether the clock is set on connect |
+| App | `android/app/src/main/java/com/lightapp/pico/Settings.java` | timeouts, refresh rates, whether the clock is set on connect |
 
 ## Pico firmware (`pico/`)
 
@@ -74,60 +74,109 @@ its fields in the `sched.put` command.
   python3 -m unittest discover pico/tests
   ```
 
-## Android app (`android/app/src/main/java/com/lightapp/pico/`)
+## Android app (`android/app/src/main/`)
+
+The app is plain Java with standard Android layouts. What a screen **looks like** is an XML
+file under `res/layout/`, which Android Studio can also show in its drag-and-drop Design view.
+What a screen **does** is a Java file under `java/com/lightapp/pico/`.
+
+### Java files (`java/com/lightapp/pico/`)
 
 Three layers; each only talks to the one below it.
 
 | Layer | File | What it holds |
 |---|---|---|
-| | `Settings.kt` | Tunable values |
-| Screens | `ui/App.kt` | Top bar, bottom tabs (`TABS`), which screen is showing |
-| | `ui/ConnectScreen.kt` | Scan list, reconnect button, permission prompts |
-| | `ui/StatusTab.kt`, `PinsTab.kt`, `SchedulesTab.kt`, `ProgramsTab.kt`, `ConsoleTab.kt` | One file per tab |
-| | `ui/Common.kt` | Shared pieces: `Section` card, `Picker` dropdown, `TextPrompt` dialog, pin mode names |
-| | `ui/MainViewModel.kt` | All on-screen state, and one function per user action |
-| Protocol | `data/PicoClient.kt` | `request("cmd", "key" to value)`: send a command, wait for the reply |
-| | `data/Models.kt` | `DeviceInfo`, `PinState`, `Schedule`, `ProgramInfo` and their JSON conversion |
-| Bluetooth | `ble/PicoBle.kt` | Scanning, connecting, sending and receiving lines |
-| | `ble/LineFramer.kt` | Joining Bluetooth fragments into lines |
+| | `Settings.java` | Tunable values |
+| Screens | `MainActivity.java` | The frame: top bar, bottom tabs, which screen is showing |
+| | `ui/ConnectFragment.java` | Scan list, reconnect button, permission prompts |
+| | `ui/StatusFragment.java`, `PinsFragment.java`, `SchedulesFragment.java`, `ProgramsFragment.java`, `ConsoleFragment.java` | One file per tab |
+| | `ui/ScheduleDialog.java` | The add/edit schedule pop-up |
+| | `ui/Ui.java` | Shared pieces: drop-down buttons, text and yes/no pop-ups, pin mode names |
+| | `PicoViewModel.java` | The hub: everything the screens show, and one method per user action |
+| Protocol | `data/PicoClient.java` | `request(...)`: send a command, get the reply in a callback |
+| | `data/DeviceInfo.java`, `PinState.java`, `Schedule.java`, `ScheduleAction.java`, `ProgramInfo.java` | The data, each with a `from(json)` |
+| | `data/Json.java` | Helpers: `Json.obj("pin", 15, "value", 1)` builds a message |
+| Bluetooth | `ble/PicoLink.java` | What a connection can do (an interface) |
+| | `ble/PicoBle.java` | The real Bluetooth connection |
+| | `ble/LineFramer.java` | Joining Bluetooth fragments into lines |
 
-Other places: `MainActivity.kt` (theme colours), `app/src/main/AndroidManifest.xml`
-(permissions), `app/src/main/res/` (app name and icon), `app/build.gradle.kts` (version,
-libraries).
+### Layout and other resource files (`res/`)
+
+| File | What it is |
+|---|---|
+| `layout/activity_main.xml` | The frame around every screen |
+| `layout/fragment_connect.xml`, `fragment_status.xml`, `fragment_pins.xml`, `fragment_schedules.xml`, `fragment_programs.xml`, `fragment_console.xml` | One per screen, matching the `...Fragment.java` of the same name |
+| `layout/item_device.xml`, `item_pin.xml`, `item_schedule.xml`, `item_program.xml`, `item_param.xml`, `row_fact.xml` | One repeated entry in a list (a pin card, a schedule card, ...) |
+| `layout/dialog_schedule.xml`, `dialog_add_pin.xml`, `dialog_text.xml` | Pop-ups |
+| `menu/tabs.xml`, `menu/top.xml` | The bottom tabs; the top-bar buttons |
+| `values/styles.xml` | Shared looks (`Card`, `CardTitle`, `SmallText`, `TextBox`, `OutlinedButton`) |
+| `values/themes.xml` | App-wide colours and theme |
+| `values/strings.xml`, `drawable/`, `mipmap-anydpi-v26/` | App name, icons |
+
+Each layout starts with a comment naming the Java file that drives it. Text shown on screen
+is written directly in the layouts and Java files, so searching the project for a phrase you
+see in the app takes you straight to it.
+
+Other places: `AndroidManifest.xml` (permissions), `app/build.gradle` (version, libraries).
 
 ### How one action flows
 
 Switching a pin on, which everything else copies:
 
-1. The `Switch` in `PinsTab.kt` calls `vm.setPin(pin, true)`.
-2. `setPin` in `MainViewModel.kt` calls `client.request("pin.set", …)`, then `loadPins()`.
-3. `loadPins()` requests `pin.list`, converts the reply with `PinState.from`, and stores it in `pins`.
-4. `PinsTab.kt` redraws by itself because it reads `pins`.
+1. The switch in `item_pin.xml` is wired up in `PinsFragment.pinCard()`, which calls
+   `vm.setPin(pin, true)`.
+2. `setPin` in `PicoViewModel.java` sends `pin.set`, and when the Pico says ok, calls `loadPins()`.
+3. `loadPins()` sends `pin.list`, converts the reply with `PinState.listFrom`, and puts it in `pins`.
+4. `PinsFragment` is observing `pins`, so its `render()` runs and rebuilds the cards.
+
+Nothing waits or blocks: a request is sent, and the code to run on the reply is handed over
+as `reply -> { ... }`.
 
 ### Recipes
 
-**Change wording or layout on a tab.** Edit that tab's file.
+**Change wording, spacing or order on a screen.** Edit its layout XML.
 
-**Show a new value from the Pico.** Read it in the matching `from()` in `Models.kt`, then
-display it in the tab.
+**Show a new value from the Pico.** Add a field to the matching class in `data/` and read it
+in its `from()`. Then show it; on the Status tab that is one line in `StatusFragment.render()`:
 
-**Add a button that sends a command.** Add a function to `MainViewModel.kt` shaped like the
-others, then call it from the tab:
-
-```kotlin
-fun readHumidity() = run {
-    humidity.value = client.request("hum.get").optDouble("value")
-}
+```java
+addFact("Humidity", info.humidity + " %");
 ```
 
-`run { }` turns any Bluetooth or Pico error into a pop-up; `say("…")` shows your own.
+**Add a button that sends a command.** Add the `<Button android:id="@+id/humidity" .../>` to
+the layout, a method to `PicoViewModel.java` shaped like the others, and one line in the
+fragment's `onViewCreated` to join them:
 
-**Add a tab.** Add it to `TABS` in `App.kt` and to the `when` block below it.
+```java
+// PicoViewModel.java
+public final MutableLiveData<Double> humidity = new MutableLiveData<>();
 
-**Change what happens on connect.** `handshake()` and `unlocked()` in `MainViewModel.kt`.
+public void readHumidity() {
+    send("hum.get", null, reply -> humidity.setValue(reply.optDouble("value")));
+}
 
-After editing, run the unit tests from the `android/` folder:
+// the fragment
+view.findViewById(R.id.humidity).setOnClickListener(v -> vm.readHumidity());
+vm.humidity.observe(getViewLifecycleOwner(), value -> label.setText(value + " %"));
+```
+
+`send(...)` turns any Bluetooth or Pico error into a pop-up; `say("…")` shows your own.
+
+**Add a tab.** Create a layout and a `Fragment` class (copy `SchedulesFragment`, the shortest
+real one), add an item to `res/menu/tabs.xml`, and a line to `MainActivity.fragmentFor()`.
+
+**Change what happens on connect.** `handshake()` and `unlocked()` in `PicoViewModel.java`.
+
+**Change the choices in a drop-down.** They are pairs of arrays kept side by side: pin modes
+in `Ui.java`, schedule action types in `ScheduleDialog.java`.
+
+### Testing without a phone
 
 ```bash
-./gradlew testDebugUnitTest
+cd android && ./gradlew testDebugUnitTest
 ```
+
+`AppTest.java` opens the real screens on your computer against `FakePico.java`, a pretend
+Pico, and taps through them. If you add a command to the firmware that a screen depends on,
+teach `FakePico.answer()` to reply to it. The first run downloads a copy of Android (about
+150 MB), so it is slow once.

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The tabs along the bottom. To add one: add an item here, then a line in
+     MainActivity.fragmentFor(). -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/tab_status" android:icon="@drawable/ic_status" android:title="Status" />
+    <item android:id="@+id/tab_pins" android:icon="@drawable/ic_pins" android:title="Pins" />
+    <item android:id="@+id/tab_schedule" android:icon="@drawable/ic_schedule" android:title="Schedule" />
+    <item android:id="@+id/tab_programs" android:icon="@drawable/ic_programs" android:title="Programs" />
+    <item android:id="@+id/tab_console" android:icon="@drawable/ic_console" android:title="Console" />
+</menu>

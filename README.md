@@ -7,7 +7,7 @@ Everything you set is stored on the Pico. The phone is a remote control for chan
 once configured, the Pico carries on by itself with no connection.
 
 ```
-android/   the Android app (Kotlin, Jetpack Compose)
+android/   the Android app (Java, standard Android layouts)
 pico/      the Pico firmware (MicroPython)
 ```
 
@@ -72,7 +72,7 @@ listed. The app sets the Pico's clock from the phone each time it connects.
 
 [DEVELOPING.md](DEVELOPING.md) maps out both halves and has step-by-step recipes for common
 changes. Values you're likely to tune are collected in `pico/settings.py` and the app's
-`Settings.kt`.
+`Settings.java`.
 
 ## Writing your own programs
 
@@ -124,5 +124,5 @@ A schedule `item`: `{"id", "name", "en", "h", "m", "days" (bit 0 = Monday), "dur
 ```bash
 python3 -m unittest discover pico/tests        # firmware logic, on desktop Python
 (cd pico && micropython tests/smoke_micropython.py)   # same, on the MicroPython unix port
-(cd android && ./gradlew testDebugUnitTest)    # app protocol code
+(cd android && ./gradlew testDebugUnitTest)    # the app: protocol code, and every screen against a pretend Pico
 ```

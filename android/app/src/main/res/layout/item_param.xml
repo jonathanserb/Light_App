@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One editable parameter of a program. The label is set to the parameter's name. -->
+<com.google.android.material.textfield.TextInputLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/box"
+    style="@style/TextBox">
+
+    <com.google.android.material.textfield.TextInputEditText
+        android:id="@+id/field"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:inputType="text"
+        android:singleLine="true" />
+</com.google.android.material.textfield.TextInputLayout>
